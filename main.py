@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-IoT HW06: Raspberry Pi 5 & YOLOv8 Car 실시간 감지 시스템 (순정 완전판)
-리눅스 표준 V4L2 인덱스 방식으로 복잡한 가속 파이프라인 없이 가장 직관적으로 카메라를 오픈합니다.
+IoT HW06: Raspberry Pi 5 & YOLOv8 Car 실시간 감지 시스템 (최종 완결본)
+하드웨어 전수조사로 확인된 /dev/video0 포트와 'BGR3' 순정 비압축 포맷을 완벽하게 지원합니다.
 """
 
 import os
@@ -16,8 +16,8 @@ from ultralytics import YOLO
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="YOLOv8 Car Real-Time Detection for Raspberry Pi 5")
-    # rpicam-hello가 열렸으므로 기본 소스 매핑을 0번 또는 4번으로 접근합니다.
-    parser.add_argument("--source", type=str, default="0", help="카메라 입력 소스 (기본값: 0)")
+    # v4l2-ctl로 확인된 진짜 하드웨어 비디오 노드인 0번을 기본값으로 고정합니다.
+    parser.add_argument("--source", type=int, default=0, help="카메라 입력 소스 (라즈베리파이 5: 0)")
     parser.add_argument("--width", type=int, default=640, help="입력 영상 가로 해상도")
     parser.add_argument("--height", type=int, default=480, help="입력 영상 세로 해상도")
     parser.add_argument("--frame-skip", type=int, default=2, help="성능 가속을 위한 프레임 건너뛰기 간격")
@@ -39,30 +39,26 @@ class CarDetectionSystem:
     def process_stream(self):
         source = self.args.source
         
-        # =========================================================================
-        # [수정] 이상한 가속 파이프라인 전부 제거, 오직 순정 리눅스 V4L2 인덱스 오픈!
-        # =========================================================================
-        if str(source).isdigit():
-            camera_index = int(source)
-            print(f"[*] 순정 리눅스 V4L2 백엔드로 카메라 [{camera_index}]번을 직접 오픈합니다.")
-            cap = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
-        else:
-            # 동영상 파일 등 문자열 경로가 들어왔을 때 처리
-            cap = cv2.VideoCapture(source)
-        # =========================================================================
+        print(f"[*] 순정 리눅스 V4L2 백엔드로 카메라 [{source}]번을 직접 오픈합니다.")
+        cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
 
         if not cap.isOpened():
-            print(f"[오류] 카메라 소스 '{source}'를 최종적으로 열 수 없습니다.")
-            print("[팁] --source 0 또는 --source 4 로 인덱스를 변경해서 실행해보세요.")
+            print(f"[오류] 카메라 소스 {source}번을 열 수 없습니다.")
             sys.exit(1)
 
-        # 해상도 및 영상 크기 강제 세팅
+        # =========================================================================
+        # [핵심 하드웨어 동기화] v4l2-ctl 조사 결과 매핑
+        # =========================================================================
+        # 파이 5 카메라 센서가 뿜어내는 'BGR3' 포맷을 OpenCV가 올바르게 해석하도록 강제 지정합니다.
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('B', 'G', 'R', '3'))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.args.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.args.height)
-        
+        # =========================================================================
+
+        # 하드웨어에서 실제로 받아온 해상도 확인
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"[*] 비디오 오픈 성공! 입력 크기: {actual_w}x{actual_h}")
+        print(f"[*] 비디오 오픈 성공! 실제 스트림 규격: {actual_w}x{actual_h}")
 
         frame_count = 0
         fps_accum = 0
@@ -74,6 +70,8 @@ class CarDetectionSystem:
         while True:
             start_tick = time.time()
             ret, frame = cap.read()
+            
+            # 포맷이 맞지 않으면 여기서 무조건 튕겼으나, BGR3 지정으로 이제 정상 통과합니다.
             if not ret:
                 print("[*] 비디오 스트림이 종료되었거나 프레임을 읽을 수 없습니다.")
                 break
@@ -82,7 +80,7 @@ class CarDetectionSystem:
             is_detection_frame = (frame_count % self.args.frame_skip == 0)
 
             if is_detection_frame:
-                # 2: car (승용차), 5: bus (버스), 7: truck (트럭)
+                # COCO 데이터셋 기준 - 2: car (승용차), 5: bus (버스), 7: truck (트럭)
                 results = self.model.predict(
                     frame, 
                     classes=[2, 5, 7], 
@@ -101,7 +99,7 @@ class CarDetectionSystem:
                 
                 cached_boxes = boxes_in_frame
 
-            # 감지된 차량 박스 시각화 (형광 초록색)
+            # 감지된 차량 화면에 시각화 (형광 초록색 박스)
             for item in cached_boxes:
                 x1, y1, x2, y2 = item["box"]
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 127), 2)
@@ -111,7 +109,7 @@ class CarDetectionSystem:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 127), 2
                 )
 
-            # FPS 계산 및 오버레이
+            # 연산 속도 및 FPS 계산
             end_tick = time.time()
             sec = end_tick - start_tick
             fps = 1.0 / sec if sec > 0 else 0
@@ -125,7 +123,7 @@ class CarDetectionSystem:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2
             )
 
-            # GUI 화면 표시
+            # GUI 디스플레이 팝업
             if not self.args.headless:
                 cv2.imshow("YOLOv8 Real-Time Car Detection", frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
