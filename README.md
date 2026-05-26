@@ -20,4 +20,8 @@ python main.py
 ```
 
 ## 🎥 실행 결과
-- 결과 동영상: [data/IMG_5123.MOV](data/IMG_5123.MOV)
+- **하드웨어 세팅**:
+  ![하드웨어 세팅](data/IMG_5124.jpg)
+- **실시간 인식 화면**:
+  ![실시간 인식 화면](data/IMG_5122.jpg)
+- **결과 동영상**: [data/IMG_5123.MOV](data/IMG_5123.MOV)

@@ -154,3 +154,8 @@ runs/
 *.jpg
 *.jpeg
 *.png
+
+# Allow images in data directory
+!data/*.jpg
+!data/*.jpeg
+!data/*.png
